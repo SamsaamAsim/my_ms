@@ -16,11 +16,18 @@ class CorsMiddleware
 
     public function handle($request, Closure $next)
     {
-        return $next($request)
-            ->header('Access-Control-Allow-Origin', '*')
-            ->header('Access-Control-Allow-Methods', '*')
-            ->header('Access-Control-Allow-Credentials', true)
-            ->header('Access-Control-Allow-Headers', 'X-Requested-With,Content-Type,X-Token-Auth,Authorization')
-            ->header('Accept', 'application/json');
+        $response = $next($request);
+
+        // Ensure the response is a proper Illuminate\Http\Response instance
+        if ($response instanceof Response) {
+            // Set CORS headers
+            $response->headers->set('Access-Control-Allow-Origin', '*');
+            $response->headers->set('Access-Control-Allow-Methods', '*');
+            $response->headers->set('Access-Control-Allow-Credentials', 'true');
+            $response->headers->set('Access-Control-Allow-Headers', 'X-Requested-With,Content-Type,X-Token-Auth,Authorization');
+            $response->headers->set('Accept', 'application/json');
+        }
+    
+        return $response;
     }
 }

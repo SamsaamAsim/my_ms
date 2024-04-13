@@ -29,6 +29,10 @@ Route::middleware(['auth:sanctum'])->get('/user', function (Request $request) {
 //     Route::post('login','login');
 //     Route::post('register','register');
 // });
+Route::post('import-excel', [ProductController::class, 'importExcel']);
+Route::get('export-excel', [ProductController::class, 'exportforallShowStockManagement']);
+
+
 Route::post('register',[AuthController::class,'register']);
 Route::post('login',[AuthController::class,'login']);
 Route::resource('products', ProductController::class);
@@ -65,6 +69,16 @@ Route::get('products/stock_management_additional_info/{productid}', [ProductCont
 
 Route::post('products/stock_managements/{productid}', [ProductController::class, 'storeOrUpdateStockManagement']);
 Route::delete('stock_management/{id}', [PriceCalculation::class, 'destroy']);
+
+Route::post('products/routine_checkup/{productid}', [ProductController::class, 'storeOrUpdateRoutineCheckup']);
+Route::get('products/routine_checkup/{productid}', [ProductController::class, 'showRoutineCheckup']);
+
+Route::get('allroutine_checkup', [ProductController::class, 'forallShowcheckRoutine']);
+
+Route::get('auto_reordering', [ProductController::class, 'forallShowAutoReordering']);
+
+Route::post('auto_reordering/{id}', [ProductController::class, 'storeOrUpdateAutoReorder']);
+
 
 // Route::prefix('products')->group(function () {
 //     Route::post('{id}', [ProductController::class, 'update']);

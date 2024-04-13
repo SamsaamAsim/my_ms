@@ -2,15 +2,20 @@
 
 namespace App\Http\Controllers;
 
+use App\Imports\ProductImport;
 use App\Models\Product;
 use App\Models\PartNumber;
 use App\Models\Competitor;
 use Illuminate\Support\Facades\Log;
+use App\Exports\ProductExport;
 
 use App\Models\Image;
 use App\Models\PriceCalculation;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
+use Maatwebsite\Excel\Facades\Excel;
+
+use Exception;
 
 use Illuminate\Http\Request;
 
@@ -26,6 +31,95 @@ class ProductController extends Controller
             'data' => $products, 
         ]);
     }
+ 
+public function importExcel(Request $request)
+{
+    try {
+        // Validate the request
+        $request->validate([
+            'file' => 'required|mimes:xls,xlsx',
+        ]);
+
+        // Record the current timestamp
+        $beforeImport = Carbon::now();
+
+        // Import the Excel file using Laravel Excel
+        Excel::import(new ProductImport, $request->file('file'));
+
+        $importedData = Excel::toArray(new ProductImport, $request->file('file'));
+
+       
+    
+        // Return success response along with the new product IDs
+        return response()->json([
+            'message' => 'Data imported successfully',
+            
+        ], 200);
+    } catch (Exception $ex) {
+        // Handle any exceptions that occur during the import process
+        return response()->json(['error' => 'Failed to import data: ' . $ex->getMessage()], 500);
+    }
+}
+
+public function exportforallShowStockManagement()
+{
+    $products = Product::whereHas('stockManagement', function ($query) {
+        $query->where('our_stock', '!=', 0);
+    })->with(['stockManagement', 'priceCalculation'])->get();
+    
+    // Check if price calculation exists for any product
+    if ($products->isEmpty() || $products->contains(function ($product) {
+        return $product->priceCalculation === null;
+    })) {
+        return response()->json([
+            'error' => 'Price calculation is missing for one or more products.'
+        ], 404);
+    }
+    
+    foreach ($products as $product) {
+        // Initialize arrays for storing the multiplication results
+        $buyingMultiplication = [];
+        $sellingMultiplication = [];
+        $profitMultiplication = [];
+        
+        // Define the fields to be multiplied by the selling, buying, and profit prices
+        $fieldsToMultiply = [
+            'available_stock',
+            'minimum_stock',
+            'maximum_stock',
+            'spare_stock',
+            'minimum_stock_required',
+            'maximum_stock_required',
+            'our_stock'
+        ];
+        
+        foreach ($fieldsToMultiply as $field) {
+            if (isset($product->stockManagement->$field)) {
+                // Perform multiplication and format to 2 decimal points
+                $buyingMultiplication[$field] = number_format($product->stockManagement->$field * $product->priceCalculation->buying, 2);
+                $sellingMultiplication[$field] = number_format($product->stockManagement->$field * $product->priceCalculation->selling, 2);
+                $profitMultiplication[$field] = number_format($product->stockManagement->$field * $product->priceCalculation->profit, 2);
+            }
+        }
+
+        // Add the multiplication results to the product object
+        $product->buying_multiplication = $buyingMultiplication;
+        $product->selling_multiplication = $sellingMultiplication;
+        $product->profit_multiplication = $profitMultiplication;
+    }
+
+    //  {
+    //     return response()->json([
+    //         'error' => 'Price calculation is missing for one or more products.'
+    //     ], 404);
+    // }
+    
+    // return $products;
+    
+    return Excel::download(new ProductExport($products), 'products.xlsx');
+}
+
+
 
     /**
      * Show the form for creating a new resource.
@@ -76,11 +170,11 @@ class ProductController extends Controller
     }
     
     
-    public function forallShowStockManagement()
+    public function forallShowAutoReordering()
     {
         $products = Product::whereHas('stockManagement', function ($query) {
             $query->where('our_stock', '!=', 0);
-        })->with(['stockManagement', 'priceCalculation'])->get();
+        })->with(['stockManagement', 'priceCalculation','autoReorder'])->get();
         
         // Check if price calculation exists for any product
         if ($products->isEmpty() || $products->contains(function ($product) {
@@ -91,19 +185,26 @@ class ProductController extends Controller
             ], 404);
         }
         
-        // Initialize the modified data array
-        $modifiedData = [];
-    
         foreach ($products as $product) {
             // Initialize arrays for storing the multiplication results
             $buyingMultiplication = [];
             $sellingMultiplication = [];
             $profitMultiplication = [];
+            $monthlyData=[];
+            $dayData=[];
             
             // Define the fields to be multiplied by the selling, buying, and profit prices
             $fieldsToMultiply = [
                 'available_stock',
                 'minimum_stock',
+                'maximum_stock',
+                'spare_stock',
+                'minimum_stock_required',
+                'maximum_stock_required',
+                'our_stock'
+            ];
+            $fieldsToMonth = [
+                'available_stock',
                 'maximum_stock',
                 'spare_stock',
                 'minimum_stock_required',
@@ -113,86 +214,213 @@ class ProductController extends Controller
             
             foreach ($fieldsToMultiply as $field) {
                 if (isset($product->stockManagement->$field)) {
+                    // $monthData[$field] = number_format($product->stockManagement->$field * $product->stockManagement->$, 2);
+    
                     // Perform multiplication and format to 2 decimal points
                     $buyingMultiplication[$field] = number_format($product->stockManagement->$field * $product->priceCalculation->buying, 2);
                     $sellingMultiplication[$field] = number_format($product->stockManagement->$field * $product->priceCalculation->selling, 2);
                     $profitMultiplication[$field] = number_format($product->stockManagement->$field * $product->priceCalculation->profit, 2);
                 }
             }
+            foreach ($fieldsToMonth as $field) {
+                $monthlyData[$field] = [
+                    ($product->stockManagement->$field / $product->stockManagement->minimum_stock),
+                    // Add calculations for other fields here
+                ];
+                $dayData[$field] = [
+                    ($product->stockManagement->$field / $product->stockManagement->minimum_stock) * 30,
+                ];
+            }
     
-            // Add the multiplication results to the modified data array
-            $modifiedData[$product->id] = [
-                'product' => $product,
-                'buying_multiplication' => $buyingMultiplication,
-                'selling_multiplication' => $sellingMultiplication,
-                'profit_multiplication' => $profitMultiplication,
-            ];
+            // Add the multiplication results to the product object
+            $product->buying_multiplication = $buyingMultiplication;
+            $product->selling_multiplication = $sellingMultiplication;
+            $product->profit_multiplication = $profitMultiplication;
         }
     
         return response()->json([
             'data' => $products,
-            'modified_data' => $modifiedData,
         ]);
     }
+
+    public function storeOrUpdateAutoReorder(Request $request, int $productId)
+    {
+        try {
+            // Find the associated product
+            $product = Product::findOrFail($productId);
+    
+            // Retrieve data from the request
+            $data = $request->only([
+                'reorder'
+                 // Include 'maximum_stock' in the list of fields
+            ]);
+          $data['total_stock_owned']=$data['reorder']+$product->stockManagement->available_stock;
+          $data['spare_still_achiveable']=$data['total_stock_owned']-$product->stockManagement->maximum_stock;
+            
+            // Check if stock management entry already exists
+            $autoReorder = $product->autoReorder;
+    
+            if ($autoReorder) {
+                // Update the existing stock management entry
+                $autoReorder->update($data);
+                $message = 'Stock management updated successfully';
+            } else {
+                // Create a new stock management entry
+                $autoReorder = $product->autoReorder()->create($data);
+                $message = 'Stock management created successfully';
+            }
+    
+            return response()->json(['message' => $message, 'data' => $autoReorder], 200);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json(['error' => 'Product not found'], 404);
+        } catch (\Exception $e) {
+            Log::error('Error storing or updating reordering: ' . $e->getMessage());
+            return response()->json(['error' => 'Error storing or updating reordering', 'message' => $e->getMessage()], 500);
+        }
+    }
+    
+
+    public function forallShowStockManagement()
+{
+    $products = Product::whereHas('stockManagement', function ($query) {
+        $query->where('our_stock', '!=', 0);
+    })->with(['stockManagement', 'priceCalculation'])->get();
+    
+    // Check if price calculation exists for any product
+    if ($products->isEmpty() || $products->contains(function ($product) {
+        return $product->priceCalculation === null;
+    })) {
+        return response()->json([
+            'error' => 'Price calculation is missing for one or more products.'
+        ], 404);
+    }
+    
+    foreach ($products as $product) {
+        // Initialize arrays for storing the multiplication results
+        $buyingMultiplication = [];
+        $sellingMultiplication = [];
+        $profitMultiplication = [];
+        
+        // Define the fields to be multiplied by the selling, buying, and profit prices
+        $fieldsToMultiply = [
+            'available_stock',
+            'minimum_stock',
+            'maximum_stock',
+            'spare_stock',
+            'minimum_stock_required',
+            'maximum_stock_required',
+            'our_stock'
+        ];
+        
+        foreach ($fieldsToMultiply as $field) {
+            if (isset($product->stockManagement->$field)) {
+                // $monthData[$field] = number_format($product->stockManagement->$field * $product->stockManagement->$, 2);
+
+                // Perform multiplication and format to 2 decimal points
+                $buyingMultiplication[$field] = number_format($product->stockManagement->$field * $product->priceCalculation->buying, 2);
+                $sellingMultiplication[$field] = number_format($product->stockManagement->$field * $product->priceCalculation->selling, 2);
+                $profitMultiplication[$field] = number_format($product->stockManagement->$field * $product->priceCalculation->profit, 2);
+            }
+        }
+
+        // Add the multiplication results to the product object
+        $product->buying_multiplication = $buyingMultiplication;
+        $product->selling_multiplication = $sellingMultiplication;
+        $product->profit_multiplication = $profitMultiplication;
+    }
+
+    return response()->json([
+        'data' => $products,
+    ]);
+}
+
+
     
     
     
 
-    public function showStockManagement(Product $product, int $id)
-    {
-        // Retrieve the product with its associated stock management and price calculation
-        $product = Product::with(['stockManagement', 'priceCalculation'])->findOrFail($id);
-        
-        // Get the price calculation for the product
-        $priceCalculation = $product->priceCalculation;
+public function showStockManagement(Product $product, int $id)
+{
+    // Retrieve the product with its associated stock management and price calculation
+    $product = Product::with(['stockManagement', 'priceCalculation'])->findOrFail($id);
     
-        // Check if price calculation exists
-        if ($priceCalculation) {
-            // Initialize the modified data array
-            $modifiedData = $product->toArray();
+    // Get the price calculation for the product
+    $priceCalculation = $product->priceCalculation;
+
+    // Check if price calculation exists
+    if ($priceCalculation) {
+        // Initialize the modified data array
+        $modifiedData = $product->toArray();
+        
+        // Initialize arrays for storing the multiplication results
+        $buyingMultiplication = [];
+        $sellingMultiplication = [];
+        $profitMultiplication = [];
+        $monthlyData = []; // Initialize array to store monthly data
+        $dayData=[];
+        // Define the fields to be multiplied by the selling, buying, and profit prices
+        $fieldsToMultiply = [
+            'available_stock',
+            'minimum_stock',
+            'maximum_stock',
+            'spare_stock',
+            'minimum_stock_required',
+            'maximum_stock_required',
+            'our_stock'
+        ];
+        $fieldsToMonth = [
+            'available_stock',
+            'maximum_stock',
+            'spare_stock',
+            'minimum_stock_required',
+            'maximum_stock_required',
+            'our_stock'
+        ];
+
+        
+        // Multiply the specified fields by the selling, buying, and profit prices
+        foreach ($fieldsToMultiply as $field) {
+            if (isset($modifiedData['stock_management'][$field])) {
+                $buyingMultiplication[$field] = number_format($modifiedData['stock_management'][$field] * $priceCalculation->buying, 2);
+                $sellingMultiplication[$field] = number_format($modifiedData['stock_management'][$field] * $priceCalculation->selling, 2);
+                $profitMultiplication[$field] = number_format($modifiedData['stock_management'][$field] * $priceCalculation->profit, 2);
+
+            }}    // Calculate monthly data
+                
+            foreach ($fieldsToMonth as $field) {
+            $monthlyData[$field] = [
+             ($modifiedData['stock_management'][$field] / $modifiedData['stock_management']['minimum_stock']) ,
+                  
+                    // Add calculations for other fields here
+                ];
+                $dayData[$field]=[
+             ($modifiedData['stock_management'][$field] / $modifiedData['stock_management']['minimum_stock'])*30 ,
+
+                ];
             
-            // Initialize arrays for storing the multiplication results
-            $buyingMultiplication = [];
-            $sellingMultiplication = [];
-            $profitMultiplication = [];
-            
-            // Define the fields to be multiplied by the selling, buying, and profit prices
-            $fieldsToMultiply = [
-                'available_stock',
-                'minimum_stock',
-                'maximum_stock',
-                'spare_stock',
-                'minimum_stock_required',
-                'maximum_stock_required',
-                'our_stock'
-            ];
-            
-            // Multiply the specified fields by the selling, buying, and profit prices
-            foreach ($fieldsToMultiply as $field) {
-                if (isset($modifiedData['stock_management'][$field])) {
-                    $buyingMultiplication[$field] = number_format($modifiedData['stock_management'][$field] * $priceCalculation->buying, 2);
-                    $sellingMultiplication[$field] = number_format($modifiedData['stock_management'][$field] * $priceCalculation->selling, 2);
-                    $profitMultiplication[$field] = number_format($modifiedData['stock_management'][$field] * $priceCalculation->profit, 2);
-                }
-            }
-            
-            // Add the multiplication results to the modified data array
-            $modifiedData['buying_multiplication'] = $buyingMultiplication;
-            $modifiedData['selling_multiplication'] = $sellingMultiplication;
-            $modifiedData['profit_multiplication'] = $profitMultiplication;
-            
-            // Return the original and modified data in a JSON response
-            return response()->json([
-                'original_data' => $product,
-                'modified_data' => $modifiedData,
-            ]);
-        } else {
-            // Handle the case where price calculation is null
-            return response()->json([
-                'error' => 'Price calculation is missing for the product.'
-            ], 404);
         }
+        
+        // Add the multiplication results and monthly data to the modified data array
+        $modifiedData['buying_multiplication'] = $buyingMultiplication;
+        $modifiedData['selling_multiplication'] = $sellingMultiplication;
+        $modifiedData['profit_multiplication'] = $profitMultiplication;
+        $modifiedData['monthly_data'] = $monthlyData;
+        $modifiedData['day_data'] = $dayData;
+
+        
+        // Return the original and modified data in a JSON response
+        return response()->json([
+            'original_data' => $product,
+            'modified_data' => $modifiedData,
+        ]);
+    } else {
+        // Handle the case where price calculation is null
+        return response()->json([
+            'error' => 'Price calculation is missing for the product.'
+        ], 404);
     }
+}
+
     
     
     
@@ -247,7 +475,7 @@ class ProductController extends Controller
             'minimum_stock',
             'dropdown',
             'spare_stock',
-            'maximum_stock', // Include 'maximum_stock' in the list of fields
+             // Include 'maximum_stock' in the list of fields
         ]);
 
         // Calculate additional fields
@@ -282,8 +510,69 @@ class ProductController extends Controller
         return response()->json(['error' => 'Error storing or updating stock management', 'message' => $e->getMessage()], 500);
     }
 }
+
+public function showRoutineCheckup(Product $product,int $id)
+{
+    {
+        $products = Product::with(['routiceCheckup'])->find($id);
+        return response()->json([
+            'data' => $products,
+        ]);
+    }
+
     
-    
+}
+
+public function forallShowcheckRoutine()
+{
+    $products = Product::with('routiceCheckup')->whereHas('routiceCheckup', function ($query) {
+        $query->where('resent_update', '!=', NULL);
+    })->get();
+
+    return response()->json([
+        'data' => $products,
+    ]);
+}
+public function storeOrUpdateRoutineCheckup(Request $request, int $productId)
+{
+    try {
+        // Find the associated product
+        $product = Product::findOrFail($productId);
+
+        // Retrieve data from the request
+        $data = $request->only([
+        'note_h',
+        'note_k',
+        'checked_on',
+        'check_again',
+        'check_again_dropdown',
+        'resent_update'
+        ]);
+
+      
+
+      
+        // Check if stock management entry already exists
+        $routiceCheckup = $product->routiceCheckup;
+
+        if ($routiceCheckup) {
+            // Update the existing stock management entry
+            $routiceCheckup->update($data);
+            $message = 'routiceCheckup updated successfully';
+        } else {
+            // Create a new stock management entry
+            $routiceCheckup = $product->routiceCheckup()->create($data);
+            $message = 'routiceCheckup created successfully';
+        }
+
+        return response()->json(['message' => $message, 'data' => $routiceCheckup], 200);
+    } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+        return response()->json(['error' => 'Product not found'], 404);
+    } catch (\Exception $e) {
+        Log::error('Error storing or updating routiceCheckup: ' . $e->getMessage());
+        return response()->json(['error' => 'Error storing or updating routiceCheckup', 'message' => $e->getMessage()], 500);
+    }
+}  
 
 
 

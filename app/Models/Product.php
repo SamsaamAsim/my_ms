@@ -33,6 +33,15 @@ class Product extends Model
     {
         return $this->hasOne(StockManagement::class);
     }
+    
+    public function routiceCheckup()
+    {
+        return $this->hasOne(RouticeCheckup::class);
+    }
+    public function autoReorder()
+    {
+        return $this->hasOne(AutoReordering::class);
+    }
 
 
 }
